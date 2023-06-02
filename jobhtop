@@ -1,0 +1,133 @@
+#!/bin/bash
+# Copyright Oleksandr Moskalenko, 2020+
+# Research Computing, University of Florida
+
+set -e
+set -u
+set -o pipefail
+
+VERBOSE="0"
+DEBUG="1"
+htop_exe="/apps/ufrc/bin/htop"
+user_name=""
+node_name=""
+interval="5"
+job_id=""
+job_id_2=""
+
+function usage (){
+    echo -e "\nUsage:"
+    echo -e "\n\tjobhtop [options] jobid"
+    echo -e "\nOptions:"
+    echo -e "\n\t-h, --help display this help message and exit"
+    echo -e "\n\t-i, --interval=INTERVAL refresh interval, sec (default: 5sec)"
+    echo -e "\n\t-n, --node=NODENAME show processes on a specific node in MPI job"
+}
+
+function get_options (){
+    while getopts "i:n:u:h-:" opt
+    do
+          case "$opt" in
+            -)
+                case "${OPTARG}" in
+                    node)
+                        node_name="${!OPTIND}"; OPTIND=$(( $OPTIND + 1 ))
+                    ;;
+                    node=*)
+                        long_val=${OPTARG#*=}
+                        long_opt=${OPTARG%=$long_val}
+                        node_name="${long_val}"
+                    ;;
+                    help)
+                        help_on="${!OPTIND}"; OPTIND=$(( $OPTIND + 1 ))
+                        usage
+                        exit 0
+                    ;;
+                    interval)
+                        interval="${!OPTIND}"; OPTIND=$(( $OPTIND + 1 ))
+                    ;;
+                    interval=*)
+                        long_val=${OPTARG#*=}
+                        long_opt=${OPTARG%=$long_val}
+                        interval="${long_val}"
+                    ;;
+                    user)
+                        user_name="${!OPTIND}"; OPTIND=$(( $OPTIND + 1 ))
+                    ;;
+                    user=*)
+                        long_val=${OPTARG#*=}
+                        long_opt=${OPTARG%=$long_val}
+                        user_name="${long_val}"
+                    ;;
+                    *)
+                        if [ "$OPTERR" = 1 ] && [ "${optspec:0:1}" != ":" ]; then
+                            echo "Unknown option --${OPTARG}" >&2
+                        fi
+                    ;;
+                esac;;
+            h) usage
+               exit 0
+                ;;
+            n) node_name="${OPTARG}"
+                ;;
+            i) interval="${OPTARG}"
+                ;;
+            u) user_name="${OPTARG}"
+                ;;
+            v) VERBOSE="1"
+                ;;
+            d) DEBUG="1"
+                ;;
+           \?) echo "Invalid option: -$OPTARG" >&2 
+            exit 1
+            ;;
+        esac
+    done
+}
+
+function show_htop (){
+    # cmd="ssh ${node_name} -o LogLevel=QUIET -t \"${htop_exe} -u ${user_name} -d ${interval_val}\""
+    ssh ${node_name} -o LogLevel=QUIET -t "${htop_exe} -u ${user_name} -d ${interval_val}"
+}
+
+################# Main #########################
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+get_options "$@"
+
+job_id=${@:$OPTIND:1}
+job_id_2=${@:$OPTIND+1:1}
+
+if [[ ! "x${job_id_2}" == "x" ]]; then
+    echo -e "Only single jobid is accepted"
+    exit 1
+fi
+
+if [[ x"${node_name}" == "x" ]]; then
+     node_name=$(sstat -n "${job_id}.batch" -o mincpunode | awk '{print $1}')
+     if [[ x"${node_name}" == "x" ]]; then
+         node_name=$(scontrol show jobid=11751879 | grep ' NodeList=' | awk -F= '{print $2}')
+         if [[ x"${node_name}" == "x" ]]; then
+            echo "ERROR: Cannot determine job node name! Abandon ship."
+            exit 1
+         fi
+     fi
+fi
+
+if [[ x"${user_name}" == "x" ]]; then
+    user_name=$(sacct -n -j ${job_id} --format=user%30 | tr -d '\n' | awk '{print $1}')
+    if [[ x"${user_name}" == "x" ]]; then
+         echo "ERROR: Cannot determine target username for the job! Abandon ship."
+         exit 1
+    fi
+fi
+
+
+echo -e "Showing processes for job '${job_id}'"
+
+interval_val=$(( 10*interval ))
+
+show_htop
